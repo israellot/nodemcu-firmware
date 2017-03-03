@@ -41,6 +41,7 @@
 
 #include <c_stdlib.h>
 #include <c_types.h>
+#include <c_string.h>
 #include <c_stdarg.h>
 #include "driver/uart.h"
 
@@ -92,6 +93,26 @@ reswitch:	switch (ch = *fmt++) {
 		case 'c':
 			ch = va_arg(ap, int);
 				put(ch & 0x7f);
+			break;
+		case '.':			//allow print with lenght specifier
+			if( *fmt++ =='*'){
+				if( *fmt++ =='s'){
+
+					n = va_arg(ap,int);		
+					p = va_arg(ap, char *);
+					if (p == 0) {
+						p = "<null>";
+						n = c_strlen(p);
+					}
+					while (n>0){
+						ch = *p++;
+						put(ch);
+						n--;
+					}
+							
+				}
+			}
+			
 			break;
 		case 's':
 			p = va_arg(ap, char *);

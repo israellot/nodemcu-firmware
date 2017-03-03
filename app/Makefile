@@ -44,6 +44,7 @@ SUBDIRS= 					\
 	tsl2561					\
 	net					\
 	http					\
+	httpserver				\
 	fatfs					\
 	esp-gdbstub				\
 	websocket
@@ -92,6 +93,7 @@ COMPONENTS_eagle.app.v6 = 			\
 	dhtlib/libdhtlib.a 			\
 	tsl2561/tsl2561lib.a			\
 	http/libhttp.a				\
+	httpserver/libhttpserver.a		\
 	websocket/libwebsocket.a		\
 	esp-gdbstub/libgdbstub.a		\
 	net/libnodemcu_net.a			\

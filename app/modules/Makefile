@@ -55,6 +55,7 @@ INCLUDES += -I ../dhtlib
 INCLUDES += -I ../fatfs
 INCLUDES += -I ../http
 INCLUDES += -I ../websocket
+INCLUDES += -I ../httpserver
 PDIR := ../$(PDIR)
 sinclude $(PDIR)Makefile
 

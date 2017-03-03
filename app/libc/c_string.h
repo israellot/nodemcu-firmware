@@ -25,7 +25,7 @@
 #define c_strncmp os_strncmp
 #define c_strncpy os_strncpy
 // #define c_strstr os_strstr
-#define c_strncasecmp c_strncmp
+
 
 #define c_strstr strstr
 #define c_strncat strncat
@@ -43,6 +43,8 @@
 
 extern size_t c_strlcpy(char *dst, const char *src, size_t siz);
 extern size_t c_strlcat(char *dst, const char *src, size_t siz);
+extern size_t c_strncasecmp(const char *s1, const char *s2, size_t n);
+extern size_t c_strcasecmp(const char *s1, const char *s2);
 extern char *c_strdup(const char *src);
 
 
