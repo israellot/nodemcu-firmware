@@ -8,26 +8,28 @@
  * ----------------------------------------------------------------------------
  */
 
+#ifndef __HTTP_MODULE_DEFAULT_
+#define __HTTP_MODULE_DEFAULT_
 
-#ifndef http_parser_h
-#define http_parser_h
-#ifdef __cplusplus
-extern "C" {
+#include "http_server_common.h"
+#include "http_server_engine.h"
+#include "http_server_module.h"
+#include "c_stdint.h"
+#include "c_stddef.h"
+#include "c_stdlib.h"
+#include "c_string.h"
+#include "c_limits.h"
+#include "c_stdio.h"
+#include "mem.h"
+#include "queue.h"
+
+
+http_module* http_module_404_new();
+http_module* http_module_default_headers_new();
+http_module* http_module_cors_new();
+
 #endif
 
 
-typedef struct {
-
-	//Listening connection data
-	struct espconn listener_connection;
-	esp_tcp listener_tcp;
-
-    
-
-} http_server_tcp;
 
 
-#ifdef __cplusplus
-}
-#endif
-#endif

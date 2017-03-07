@@ -16,86 +16,130 @@
 extern "C" {
 #endif
 
+struct http_module;
+struct http_server_engine;
+
 #include "queue.h"
+#include "http_server_common.h"
+#include "http_server_module.h"
 #include "http_parser.h"
-
-#define MAX_HEADERS 10
-
+#include "user_config.h"
 
 
-static const char log_prefix[] = "HTTP Server: ";
 
-#if defined(DEVELOP_VERSION)
-    #ifndef HTTPSERVER_DEBUG_ON
-        #define HTTPSERVER_DEBUG_ON 1
-    #endif    
-#else
-    #ifndef HTTPSERVER_DEBUG_ON
-        #define HTTPSERVER_DEBUG_ON 0
-    #endif
-#endif
-#if HTTPSERVER_DEBUG_ON == 1
-  #define HTTPSERVER_DEBUG(format, ...) dbg_printf("%s"format"\n", log_prefix, ##__VA_ARGS__)  
-#else
-  #define HTTPSERVER_DEBUG(...)
-#endif
-#if defined(NODE_ERROR)
-  #define HTTPSERVER_ERR(format, ...) NODE_ERR("%s"format"\n", log_prefix, ##__VA_ARGS__)
-#else
-  #define HTTPSERVER_ERR(...)
-#endif
-
-typedef struct {
-	const char * key;
-	char * value;	
+typedef struct http_request_header {
+	const char *key;
+	char *value;	
     unsigned char found;
-} header;
+} http_request_header;
 
-typedef struct http_server_tcp_connection{
-    LIST_ENTRY(http_server_tcp_connection) list;
+typedef struct http_response_header{
+    char *key;
+    char *value;
+} http_response_header;
+
+typedef struct http_request {
+        
+        const char *method;
+        unsigned int method_code;
+
+        struct url{
+            char *data;
+            struct http_parser_url url_parsed;            
+            char *path;
+            char *query;
+        } url;
+
+        http_request_header headers[MAX_HEADERS];
+        
+        struct body{
+            char save_flag;
+            char *data;
+            unsigned int length;
+	    } body;	
+
+
+} http_request;
+
+typedef struct http_response {
+
+        unsigned int code;
+
+        http_response_header headers[MAX_HEADERS]; 
+
+        struct http_response_output{
+            char *buffer;
+            unsigned int buffer_pos;
+            unsigned int buffer_len;
+        } output;
+
+        
+
+} http_response;
+
+typedef void (*http_connection_close_delegate)(void *reference);
+typedef void (*http_connection_send_data)(void *reference,char *data, unsigned short len);
+struct http_server_engine_connection;
+struct http_server_engine;
+
+typedef struct http_server_engine_connection{
+
+    struct http_server_engine *server;
+
+    LIST_ENTRY(http_server_engine_connection) list;
 
     void *reference;
 
     struct http_parser parser;
 	struct http_parser_settings parser_settings;
 
-    struct request {
-        char *url;
-	    struct http_parser_url url_parsed;
-        header headers[MAX_HEADERS];
+    http_request request;
+    http_response response;
 
-        
-        struct {
-            char saveFlag;
-            char *data;
-            unsigned int lenght;
-	    } body;	
+    struct http_module* module_list[MAX_MODULES];
 
+    struct http_module *response_module; //module responsible to sending response
 
-    } request;
-
+    //callbacks
+    http_connection_close_delegate connection_close_callback;
+    http_connection_send_data send_data_callback;
     
 
-} http_server_tcp_connection;
+}http_server_engine_connection;
 
-
-typedef LIST_HEAD(connection_list, http_server_tcp_connection) connection_list;
+ 
 typedef struct http_server_engine{
 
-    connection_list connections;
+    LIST_HEAD(connection_list, http_server_engine_connection) connection_list;
+
+    struct http_module* module_list[MAX_MODULES];
 
     void *reference;
-} http_server_engine;
+}http_server_engine;
 
+typedef struct http_server_engine http_server_engine;
+typedef struct http_server_engine_connection http_server_engine_connection;
 
 
 
 
 http_server_engine* http_server_engine_new();
-void http_server_engine_new_connection(http_server_engine *server, void *reference);
+http_server_engine_connection* http_server_engine_new_connection(http_server_engine *server, void *reference);
 void http_server_engine_tcp_received(http_server_engine *server,void *reference,char *buffer,unsigned short len);
+void http_server_engine_tcp_ready_to_send(http_server_engine *server,void *reference);
+void http_server_engine_tcp_disconnected(http_server_engine *server,void *reference);
+void http_server_connection_add_request_header(http_server_engine_connection *connection,char *new_header);
+http_request_header* http_server_connection_get_header(http_server_engine_connection *c,char *key);
 
-
+//parser 
+static int parser_on_message_begin(http_parser *parser);
+static int parser_on_url(http_parser *parser, const char *url, size_t length);
+static int parser_on_status(http_parser *parser, const char *at, size_t length);
+static int parser_on_header_field(http_parser *parser, const char *at, size_t length);
+static int parser_on_header_value(http_parser *parser, const char *at, size_t length);
+static int parser_on_headers_complete(http_parser *parser);
+static int parser_on_body(http_parser *parser, const char *at, size_t length);
+static int parser_on_message_complete(http_parser *parser);
 
 #ifdef __cplusplus
 }

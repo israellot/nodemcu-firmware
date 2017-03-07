@@ -71,6 +71,7 @@
 //#define LUA_USE_MODULES_WPS
 //#define LUA_USE_MODULES_WS2801
 //#define LUA_USE_MODULES_WS2812
+#define LUA_USE_MODULES_HTTPSERVER
 
 #endif  /* LUA_CROSS_COMPILER */
 #endif	/* __USER_MODULES_H__ */

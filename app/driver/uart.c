@@ -40,8 +40,29 @@ static os_timer_t autobaud_timer;
 
 static void (*alt_uart0_tx)(char txchar);
 
-LOCAL void ICACHE_RAM_ATTR
-uart0_rx_intr_handler(void *para);
+LOCAL void ICACHE_RAM_ATTR uart0_rx_intr_handler(void *para);
+
+
+#define UART_RX_INTR_DISABLE(uart) CLEAR_PERI_REG_MASK(UART_INT_ENA(uart), UART_RXFIFO_FULL_INT_ENA|UART_RXFIFO_TOUT_INT_ENA)
+#define UART_RX_INTR_ENABLE(uart) SET_PERI_REG_MASK(UART_INT_ENA(uart), UART_RXFIFO_FULL_INT_ENA|UART_RXFIFO_TOUT_INT_ENA)
+#define UART_TX_INTR_DISABLE(uart) CLEAR_PERI_REG_MASK(UART_INT_ENA(uart), UART_TXFIFO_EMPTY_INT_ENA)
+#define UART_TX_INTR_ENABLE(uart) SET_PERI_REG_MASK(UART_CONF1(uart), (UART_TX_EMPTY_THRESH_VAL & UART_TXFIFO_EMPTY_THRHD)<<UART_TXFIFO_EMPTY_THRHD_S);	\
+    						   SET_PERI_REG_MASK(UART_INT_ENA(uart), UART_TXFIFO_EMPTY_INT_ENA)
+
+#define UART_RESET_FIFO(uart) SET_PERI_REG_MASK(UART_CONF0(uart), UART_RXFIFO_RST | UART_TXFIFO_RST);	\
+    					   CLEAR_PERI_REG_MASK(UART_CONF0(uart), UART_RXFIFO_RST | UART_TXFIFO_RST)
+
+#define UART_CLEAR_ALL_INTR(uart) WRITE_PERI_REG(UART_INT_CLR(uart), 0xffff)
+#define UART_CLEAR_INTR(uart,INTERRUPT) WRITE_PERI_REG(UART_INT_CLR(uart), INTERRUPT)
+#define UART_INTERRUPT_IS(uart,INTERRUPT) INTERRUPT == (READ_PERI_REG(UART_INT_ST(uart)) & INTERRUPT)
+
+#define UART_RX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT
+#define UART_TX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_TXFIFO_CNT_S)&UART_TXFIFO_CNT
+
+#define UART0_READ_CHAR() READ_PERI_REG(UART_FIFO(UART0)) & 0xFF
+#define UART_WRITE_CHAR(uart,c) WRITE_PERI_REG(UART_FIFO(uart), c)
+
+
 
 /******************************************************************************
  * FunctionName : uart_config
@@ -134,15 +155,13 @@ uart_tx_one_char(uint8 uart, uint8 TxChar)
       return OK;
     }
 
-    while (true)
-    {
-      uint32 fifo_cnt = READ_PERI_REG(UART_STATUS(uart)) & (UART_TXFIFO_CNT<<UART_TXFIFO_CNT_S);
-      if ((fifo_cnt >> UART_TXFIFO_CNT_S & UART_TXFIFO_CNT) < 126) {
-        break;
-      }
+    while (true){
+        uint8_t fifo_cnt = UART_TX_FIFO_COUNT(uart);
+        if (fifo_cnt < 126) {
+            break;
+        }
     }
-
-    WRITE_PERI_REG(UART_FIFO(uart) , TxChar);
+    UART_WRITE_CHAR(uart,TxChar);
     return OK;
 }
 

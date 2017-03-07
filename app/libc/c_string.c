@@ -172,8 +172,8 @@ size_t c_strncasecmp(const char *s1, const char *s2, size_t n)
     unsigned char u1, u2;
 
     for (; n != 0; --n) {
-	u1 = (unsigned char) *s1++;
-	u2 = (unsigned char) *s2++;
+		u1 = (unsigned char) *s1++;
+		u2 = (unsigned char) *s2++;
 	if (charmap[u1] != charmap[u2]) {
 	    return charmap[u1] - charmap[u2];
 	}

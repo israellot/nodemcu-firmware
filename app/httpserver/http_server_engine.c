@@ -11,6 +11,8 @@
 #include "http_server_engine.h"
 #include "http_parser.h"
 #include "http_server.h"
+#include "http_server_module.h"
+#include "http_module_default.h"
 #include "c_stdint.h"
 #include "c_stddef.h"
 #include "c_stdlib.h"
@@ -22,46 +24,49 @@
 
 
 
-static int ICACHE_FLASH_ATTR parser_on_message_begin(http_parser *parser);
-static int parser_on_url(http_parser *parser, const char *url, size_t length);
-static int parser_on_status(http_parser *parser, const char *at, size_t length);
-static int parser_on_header_field(http_parser *parser, const char *at, size_t length);
-static int parser_on_header_value(http_parser *parser, const char *at, size_t length);
-static int parser_on_headers_complete(http_parser *parser);
-static int parser_on_body(http_parser *parser, const char *at, size_t length);
-static int parser_on_message_complete(http_parser *parser);
-
-
 
 http_server_engine* http_server_engine_new() {	
 	
-    http_server_engine *new_instance = (http_server_engine*)malloc(sizeof(http_server_engine));
-			
+    http_server_engine *new_instance = (http_server_engine*)zalloc(sizeof(http_server_engine));			
 	
-	LIST_INIT(&(new_instance->connections));
+	LIST_INIT(&(new_instance->connection_list));
+
+	//default modules	
+	http_module_attach_to_engine(new_instance,http_module_404_new());
+	http_module_attach_to_engine(new_instance,http_module_default_headers_new());
+	http_module_attach_to_engine(new_instance,http_module_cors_new());
+
 
 	return new_instance;
 }
 
 
+http_server_engine_connection* http_server_engine_new_connection(http_server_engine *server, void *reference){
 
-void http_server_engine_new_connection(http_server_engine *server, void *reference){
-
-	HTTPSERVER_DEBUG("http_server_engine_new_connection. Reference: %p",reference);
+	HTTPSERVER_DEBUG("http_server_engine_new_connection. Reference: %ld",reference);
 
 	//allocate a new connection object
-	http_server_tcp_connection *new_connection = (http_server_tcp_connection*)zalloc(sizeof(http_server_tcp_connection));
-	//save external referenc
+	http_server_engine_connection *new_connection = (http_server_engine_connection*)zalloc(sizeof(http_server_engine_connection));
+
+	if(new_connection==NULL){
+		HTTPSERVER_DEBUG("http_server_engine_new_connection failed to allocate memory for new connection");
+		return NULL;
+	}
+
+	new_connection->server =server;//attach to server
+
+	//save external reference
 	new_connection->reference=reference; 
 	//insert it into the list
-	LIST_INSERT_HEAD(&(server->connections),new_connection,list);
+	LIST_INSERT_HEAD(&(server->connection_list),new_connection,list);
 	
+	return new_connection;
 }
 
-static http_server_tcp_connection* find_connection(http_server_engine *server,void *reference){
+static http_server_engine_connection* find_connection(http_server_engine *server,void *reference){
 
-	http_server_tcp_connection *conn;
-	LIST_FOREACH(conn,&(server->connections),list){
+	http_server_engine_connection *conn;
+	LIST_FOREACH(conn,&(server->connection_list),list){
 		if(conn->reference==reference)
 			return conn;
 	}
@@ -69,17 +74,89 @@ static http_server_tcp_connection* find_connection(http_server_engine *server,vo
 	return NULL;
 }
 
-void http_server_engine_tcp_received(http_server_engine *server,void *reference,char *buffer,unsigned short len){
+void http_server_engine_close_connection(http_server_engine *server,http_server_engine_connection *c){
 
-	http_server_tcp_connection *connection = find_connection(server,reference);
+	HTTPSERVER_DEBUG("http_server_engine_close_connection. Reference: %ld",c->reference);
+
+	//free url
+	if(c->request.url.data!=NULL){
+		free(c->request.url.data);		
+	}
+
+	//free request headers
+	for(int i=0;i<MAX_HEADERS;i++){
+		if(c->request.headers[i].value!=NULL)
+			free(c->request.headers[i].value);
+	}
+
+	//free response headers
+	for(int i=0;i<MAX_HEADERS;i++){
+		if(c->response.headers[i].key!=NULL)
+			free(c->response.headers[i].key);
+	}
+
+	//free body
+	if(c->request.body.data!=NULL){
+		free(c->request.body.data);
+	}
+
+	//free response buffer
+	if(c->response.output.buffer!=NULL){
+		free(c->response.output.buffer);
+	}
+
+	if(c->connection_close_callback!=NULL)
+		c->connection_close_callback(c->reference);
+
+	//remove from the list
+	LIST_REMOVE(c,list);	
+
+	//finally free the connection object
+	free(c);
+
+}
+
+void http_server_engine_tcp_disconnected(http_server_engine *server,void *reference){
+
+	http_server_engine_connection *connection = find_connection(server,reference);
 
 	if(connection==NULL){
-		HTTPSERVER_DEBUG("http_server_engine_tcp_received : Connection not found")
+		HTTPSERVER_DEBUG("http_server_engine_tcp_disconnected : Connection not found");
+		return;
+	}
+
+	http_server_engine_close_connection(server,connection);
+
+}
+
+//called by server when tcp is ready to send more data
+void http_server_engine_tcp_ready_to_send(http_server_engine *server,void *reference){
+
+
+	http_server_engine_connection *connection = find_connection(server,reference);
+
+	if(connection==NULL){
+		HTTPSERVER_DEBUG("http_server_engine_tcp_disconnected : Connection not found");
+		return;
+	}
+
+	//close for now
+	http_server_engine_close_connection(server,connection);
+
+
+}
+
+void http_server_engine_tcp_received(http_server_engine *server,void *reference,char *buffer,unsigned short len){
+
+	http_server_engine_connection *connection = find_connection(server,reference);
+
+	if(connection==NULL){
+		HTTPSERVER_DEBUG("http_server_engine_tcp_received : Connection not found");
 		return;
 	}
 
 	if(connection->parser.data==NULL){
-		HTTPSERVER_DEBUG("http_server_engine_tcp_received: Begin receive data. Initing parser")
+		//HTTPSERVER_DEBUG("http_server_engine_tcp_received: Begin receive data. Initing parser");
 		//init http parser settings
 		http_parser_settings_init(&(connection->parser_settings));
 		connection->parser_settings.on_message_begin=parser_on_message_begin;
@@ -95,13 +172,71 @@ void http_server_engine_tcp_received(http_server_engine *server,void *reference,
 
 		connection->parser.data=connection; //save connection reference on parser 
 	}
+
+	//pass data to http_parser	
+	unsigned int nparsed = http_parser_execute(
+		&(connection->parser),
+		&(connection->parser_settings),
+		buffer,
+		len);
+
+	if (connection->parser.upgrade) {
+  		/* handle new protocol */
+		//on_websocket_data(&conn->parser,data,len);
+		HTTPSERVER_DEBUG("http_server_engine_tcp_received: Connection Upgrade");
+
+	} else if (nparsed != len) {
+		HTTPSERVER_DEBUG("http_server_engine_tcp_received: Parser error");
+	  	// Handle error. Usually just close the connection.
+		http_server_engine_close_connection(server,connection);
+		
+	}
 }
 
 
+void http_server_connection_add_request_header(http_server_engine_connection *connection,char *new_header){
 
-//HTTP PARSER CALLBACKS
+	for(unsigned int i=0;i<MAX_HEADERS;i++){
 
-static int ICACHE_FLASH_ATTR parser_on_message_begin(http_parser *parser){
+		http_request_header *header = &(connection->request.headers[i]);
+
+		if(header->key==NULL){
+			header->key=new_header;
+			return;
+		}
+
+		if(strcasecmp(header->key,new_header)==0)
+			return;
+
+		
+	}
+
+	HTTPSERVER_DEBUG("http_server_connection_add_request_header: max headers count reached");	
+
+}
+
+http_request_header* http_server_connection_get_header(http_server_engine_connection *c,char *key){
+
+	for(unsigned i=0;i<MAX_HEADERS;i++){
+
+		http_request_header *header = &(c->request.headers[i]);
+
+		if(header->key==NULL)
+			break;
+
+		if(strcasecmp(header->key,key)==0 && header->value!=NULL){
+			return header;
+		}
+	}
+
+	return NULL;
+
+}
+
+/*
+ *  HTTP PARSER CALLBACKS
+ */ 
+static int  parser_on_message_begin(http_parser *parser){
 	HTTPSERVER_DEBUG("http_parser message begin");
 	
 	//nothing to do here
@@ -109,52 +244,56 @@ static int ICACHE_FLASH_ATTR parser_on_message_begin(http_parser *parser){
 }
 
 
-
 static int parser_on_url(http_parser *parser, const char *url, size_t length)
 {	
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
 	//copy url to request info
-	c->request.url = (char*)malloc(length+1);
-	memcpy(c->request.url,url,length); 
-	c->request.url[length]=0; //null terminate string
+	c->request.url.data = (char*)malloc(length+1);
+	memcpy(c->request.url.data,url,length); 
+	c->request.url.data[length]=0; //null terminate string
 	
-	HTTPSERVER_DEBUG("parser_on_url : method: %d",parser->method);
-	HTTPSERVER_DEBUG("parser_on_url : url: %s",c->request.url);
+	c->request.method =http_method_str(parser->method);
+	c->request.method_code=(unsigned int)parser->method;
+
+	HTTPSERVER_DEBUG("parser_on_url : method: %s",c->request.method);
+	//HTTPSERVER_DEBUG("parser_on_url : url: %s",c->request.url.data);
+
+	struct http_parser_url *url_parser = &(c->request.url.url_parsed);
 
 	//Parse url
-	memset(&(c->request.url_parsed),0,sizeof(struct http_parser_url));
+	memset(url_parser,0,sizeof(struct http_parser_url));
 
 	http_parser_parse_url(
-		(const char *)c->request.url,
-		length,
-		0,
-		&(c->request.url_parsed)
-		);
+			(const char *)c->request.url.data,
+			length,
+			0,
+			url_parser
+	);
 
-	#ifdef DEVELOP_VERSION
+	if(url_parser->field_set & (1<<UF_PATH)){	
 
-		#define URL_DEBUG(FIELD) do{ \
-			if(c->request.url_parsed.field_set & (1<<FIELD)){	\
-				HTTPSERVER_DEBUG("parser_on_url " #FIELD ": %.*s",c->request.url_parsed.field_data[ FIELD ].len,c->request.url+c->request.url_parsed.field_data[ FIELD ].off)	\
-			}	\
-			while(0)
-		
+		char * start = c->request.url.data + url_parser->field_data[UF_PATH].off;
+		char * end = start + url_parser->field_data[UF_PATH].len;
+		*end=0;
 
-		HTTPSERVER_DEBUG("parser_on_url PORT: %d",c->request.url_parsed.port);			
+		c->request.url.path = start;
 
-		URL_DEBUG(UF_SCHEMA);
-		URL_DEBUG(UF_HOST);
-		URL_DEBUG(UF_PORT);
-		URL_DEBUG(UF_PATH);
-		URL_DEBUG(UF_QUERY);
-		URL_DEBUG(UF_FRAGMENT);
-		URL_DEBUG(UF_USERINFO);
+		HTTPSERVER_DEBUG("parser_on_url path: %s",start);
+	}
+	if(url_parser->field_set & (1<<UF_QUERY)){	
 
-	#endif
+		char * start = c->request.url.data + url_parser->field_data[UF_QUERY].off;		
+		char * end = start + url_parser->field_data[UF_QUERY].len;
+		*end=0;
 
-	
+		c->request.url.query = start;
+
+		HTTPSERVER_DEBUG("parser_on_url query: %s",start);
+	}
+
+	http_module_process(c,HTTP_REQUEST_ON_URL);
 
 	return 0;
 }
@@ -164,7 +303,7 @@ static int parser_on_status(http_parser *parser, const char *at, size_t length)
 	HTTPSERVER_DEBUG("parser_on_status STATUS: %.*s",length,at);
 
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 	
 	return 0;
 }
@@ -172,11 +311,15 @@ static int parser_on_status(http_parser *parser, const char *at, size_t length)
 
 static int parser_on_header_field(http_parser *parser, const char *at, size_t length)
 {
-	HTTPSERVER_DEBUG("parser_on_header_field Header: %.*s",length,at);
+	//HTTPSERVER_DEBUG("parser_on_header_field Header: %.*s",length,at);
 
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
+	//clear found flag for all
+	for(int i=0;i<MAX_HEADERS;i++){
+		c->request.headers[i].found=0;
+	}
 	
 	for(int i=0;i<MAX_HEADERS;i++){
 		if(c->request.headers[i].key==NULL)
@@ -194,25 +337,42 @@ static int parser_on_header_field(http_parser *parser, const char *at, size_t le
 
 static int parser_on_header_value(http_parser *parser, const char *at, size_t length)
 {
-	HTTPSERVER_DEBUG("parser_on_header_value Header: %.*s",length,at);
+	//HTTPSERVER_DEBUG("parser_on_header_value Header: %.*s",length,at);
 	
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
 
 	for(int i=0;i<MAX_HEADERS;i++){
 		if(c->request.headers[i].key==NULL)
 			break;
 
-		if(c->request.headers[i].found==1 && c->request.headers[i].value==NULL){
-			HTTPSERVER_DEBUG("parser_on_header_value Saving header");
-			
-			c->request.headers[i].value=(char *)malloc(length+1);
-			os_memcpy(c->request.headers[i].value,at,length);
-			c->request.headers[i].value[length]=0;
+		if(c->request.headers[i].found==1){
 
-			break;
-		}		
+			if(c->request.headers[i].value==NULL){
+				HTTPSERVER_DEBUG("parser_on_header_value Saving header");
+				
+				c->request.headers[i].value=(char *)malloc(length+1);
+				memcpy(c->request.headers[i].value,at,length);
+				c->request.headers[i].value[length]=0;
+
+				break;
+			}
+			else{
+				//header values can come in more than one packet, hance being split
+				//here we join them
+
+				unsigned int currentLength = strlen(c->request.headers[i].value);
+				unsigned int newLength = currentLength+length+1;
+				char * newBuffer = (char *)malloc(newLength+1);
+				memcpy(newBuffer,c->request.headers[i].value,currentLength); //copy previous data
+				memcpy(newBuffer+currentLength,at,length); //copy new data
+				newBuffer[newLength]=0; //null terminate
+				free(c->request.headers[i].value);
+				c->request.headers[i].value=newBuffer;				
+			}
+		}
+		
 	}	
 
 	
@@ -223,6 +383,15 @@ static int parser_on_headers_complete(http_parser *parser)
 {
 	HTTPSERVER_DEBUG("parser_on_headers_complete");
 
+	//grab the connection
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
+
+	//clear found flag for all
+	for(int i=0;i<MAX_HEADERS;i++){
+		c->request.headers[i].found=0;
+	}
+
+	http_module_process(c,HTTP_REQUEST_ON_HEADERS);
 
 	return 0;	
 }
@@ -232,11 +401,10 @@ static int parser_on_body(http_parser *parser, const char *at, size_t length)
 	HTTPSERVER_DEBUG("parser_on_body data :%.*s",length,at);
 
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
-
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 	
 
-	if(c->request.body.saveFlag){
+	if(c->request.body.save_flag){
 
 		HTTPSERVER_DEBUG("parser_on_body saving %d bytes",length);
 
@@ -244,30 +412,28 @@ static int parser_on_body(http_parser *parser, const char *at, size_t length)
 			c->request.body.data = (char *)malloc(length+1);		
 			os_memcpy(c->request.body.data,at,length);	
 			c->request.body.data[length]=0;
-			c->request.body.lenght = length;			
+			c->request.body.length = length;			
 		}
 		else{
 			//assuming body can come in different tcp packets, this callback will be called
 			//more than once
 
-			unsigned int newLenght = c->request.body.lenght+length;
-			char * newBuffer = (char *)malloc(newLenght+1);
-			os_memcpy(newBuffer,c->request.body.data,c->request.body.lenght); //copy previous data
-			os_memcpy(newBuffer+c->request.body.lenght,at,length); //copy new data
-			os_free(c->request.body.data); //free previous
+			unsigned int newLength = c->request.body.length+length;
+			char * newBuffer = (char *)malloc(newLength+1);
+			memcpy(newBuffer,c->request.body.data,c->request.body.length); //copy previous data
+			memcpy(newBuffer+c->request.body.length,at,length); //copy new data
+			free(c->request.body.data); //free previous
 			c->request.body.data=newBuffer;
-			c->request.body.lenght=newLenght;
-			c->request.body.data[newLenght]=0;
+			c->request.body.length=newLength;
+			c->request.body.data[newLength]=0;
 		}
 
 	}
 	
-	
+	http_module_process(c,HTTP_REQUEST_ON_BODY);
 
 	return 0;	
 }
-
-
 
 static int parser_on_message_complete(http_parser *parser)
 {
@@ -275,14 +441,16 @@ static int parser_on_message_complete(http_parser *parser)
 	HTTPSERVER_DEBUG("parser_on_message_complete");
 
 	//grab the connection
-	http_server_tcp_connection *c = (http_server_tcp_connection *)parser->data;
+	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
-	//free body, as soon as possible
-	if(c->request.body.saveFlag==1 && c->request.body.data!=NULL){
-		HTTPSERVER_DEBUG("parser_on_message_complete freeing body memory");
-		free(c->request.body.data);
-		c->request.body.lenght=0;
-	}	
+	http_module_process(c,HTTP_REQUEST_ON_BODY_COMPLETE);
+
+	// //free body, as soon as possible
+	// if(c->request.body.data!=NULL){
+	// 	HTTPSERVER_DEBUG("parser_on_message_complete freeing body memory");
+	// 	free(c->request.body.data);
+	// 	c->request.body.length=0;
+	// }	
 
 	return 0;
 }
