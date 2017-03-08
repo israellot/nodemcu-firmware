@@ -27,9 +27,6 @@
 #define memcpy(a,b,c) c_memcpy(a,b,c)
 #endif
 
-#ifndef printf 
-#define printf c_sprintf
-#endif
 
 static const char log_prefix[] = "hs ";
 
@@ -56,6 +53,7 @@ static const char log_prefix[] = "hs ";
 #define MAX_MODULES 20
 #define MAX_HEADERS 15
 #define MAX_PATTERNS_MODULE 5
+#define HTTP_HEADER_TEMP_SIZE 30
 
 #define HTTP_REQUEST_ON_URL 0
 #define HTTP_REQUEST_ON_HEADERS 1

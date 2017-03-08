@@ -10,7 +10,7 @@
 
 
 
-#include "http_module_default.h"
+#include "http_module.h"
 #include "http_server_module.h"
 #include "http_server_engine.h"
 #include "http_server_response.h"
@@ -32,18 +32,18 @@ void http_module_404_on_destroy(http_module *module){
 
 }
 
-void http_module_404_on_body(struct http_module *module,http_server_engine_connection *c){
+void http_module_404_on_body(struct http_module *module,http_server_engine_connection *c,void **data){
 
     if(c->response_module==NULL){
         //no module claimed to respond
 
         HTTPSERVER_DEBUG("http_module_404_on_body sending response");
 
-        c->response_module=module;
+       
 
         c->response.code=HTTP_NOT_FOUND;
 
-        http_engine_response_send_no_body(c);
+       
 
     }
 

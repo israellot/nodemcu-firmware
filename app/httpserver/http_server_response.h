@@ -25,6 +25,7 @@ extern "C" {
 #define HTTP_CONTENT_LENGTH "Content-Length"
 #define HTTP_TRANSFER_ENCODING "Transfer-Encoding"
 #define HTTP_CONNECTION "Connection"
+#define HTTP_CONNECTION_CLOSE "Close"
 #define HTTP_CONTENT_TYPE "Content-Type"
 #define HTTP_SERVER "Server"
 #define HTTP_ACCESS_CONTROL_ALLOW_ORIGIN "Access-Control-Allow-Origin"
@@ -46,8 +47,9 @@ extern "C" {
 
 
 void http_engine_response_add_header(http_server_engine_connection *c,char *key,char *value);
-void http_engine_response_send_body_fixed(http_server_engine_connection *c,char *content_type,char *body,unsigned int len);
-void http_engine_response_send_no_body(http_server_engine_connection *c);
+void http_engine_response_write_response(http_server_engine_connection *c,char *buffer,unsigned int len);
+void http_engine_response_send_response(http_server_engine_connection *c);
+void http_engine_response_clear_headers(http_server_engine_connection *c);
 
 #ifdef __cplusplus
 }

@@ -25,12 +25,11 @@ struct http_server_engine;
 #include "http_parser.h"
 #include "user_config.h"
 
-
+struct http_server_engine_connection;
 
 typedef struct http_request_header {
 	const char *key;
-	char *value;	
-    unsigned char found;
+	char *value;	   
 } http_request_header;
 
 typedef struct http_response_header{
@@ -51,6 +50,9 @@ typedef struct http_request {
         } url;
 
         http_request_header headers[MAX_HEADERS];
+        char *header_temp;
+        unsigned int header_state;
+
         
         struct body{
             char save_flag;
@@ -65,6 +67,14 @@ typedef struct http_response {
 
         unsigned int code;
 
+        char * content_type;
+
+        unsigned int content_length;
+
+        unsigned int headers_sent;
+
+        unsigned int body_finished;
+
         http_response_header headers[MAX_HEADERS]; 
 
         struct http_response_output{
@@ -77,10 +87,25 @@ typedef struct http_response {
 
 } http_response;
 
-typedef void (*http_connection_close_delegate)(void *reference);
-typedef void (*http_connection_send_data)(void *reference,char *data, unsigned short len);
+typedef void (*http_connection_yield_callback)(struct http_server_engine_connection *connection,void *data);
+
+typedef struct http_server_engine_yield{
+    struct http_server_engine_connection *connection;
+    void *data;
+    http_connection_yield_callback callback;
+}http_server_engine_yield;
+
+typedef void (*http_connection_delegate)(void *reference);
+typedef void (*http_connection_yield_delegate)(http_server_engine_yield *yield_data);
+typedef void (*http_connection_send_data)(void *reference,char *data, unsigned int len);
+
 struct http_server_engine_connection;
 struct http_server_engine;
+
+typedef struct http_server_engine_connection_module{
+    struct http_module *module;
+    void *data;
+}http_server_engine_connection_module;
 
 typedef struct http_server_engine_connection{
 
@@ -96,12 +121,13 @@ typedef struct http_server_engine_connection{
     http_request request;
     http_response response;
 
-    struct http_module* module_list[MAX_MODULES];
+    http_server_engine_connection_module module_list[MAX_MODULES];
 
-    struct http_module *response_module; //module responsible to sending response
+    http_server_engine_connection_module *response_module; //module responsible to sending response
 
     //callbacks
-    http_connection_close_delegate connection_close_callback;
+    http_connection_delegate connection_close_callback;
+    http_connection_yield_delegate yield_callback;
     http_connection_send_data send_data_callback;
     
 
@@ -119,8 +145,6 @@ typedef struct http_server_engine{
 
 typedef struct http_server_engine http_server_engine;
 typedef struct http_server_engine_connection http_server_engine_connection;
-
-
 
 
 http_server_engine* http_server_engine_new();

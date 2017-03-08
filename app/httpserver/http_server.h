@@ -40,7 +40,8 @@ typedef struct http_server_instance{
     http_server_engine* engine;
 
     //Listening connection data
-	struct espconn server_conn;
+	struct espconn *server_conn;
+
 	esp_tcp server_tcp;
 
 }http_server_instance;
@@ -54,6 +55,7 @@ typedef struct esp_tcp_connection{
     uint32_t local_port;
     struct espconn *conn;
     uint8_t disconnected;
+   
 
     struct tcp_data{
         char *buffer;
@@ -69,6 +71,7 @@ typedef LIST_HEAD(esp_tcp_connection_list, esp_tcp_connection) esp_tcp_connectio
 //public interface
 http_server_instance *http_server_new();
 int http_server_listen(http_server_instance* server,listen_interface interface,unsigned int port);
+int http_server_connection_count(http_server_instance *server_instance );
 
 //This are the functions that need to be implemented by port
 

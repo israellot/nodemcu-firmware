@@ -12,7 +12,8 @@
 #include "http_parser.h"
 #include "http_server.h"
 #include "http_server_module.h"
-#include "http_module_default.h"
+#include "http_server_response.h"
+#include "http_module.h"
 #include "c_stdint.h"
 #include "c_stddef.h"
 #include "c_stdlib.h"
@@ -32,9 +33,9 @@ http_server_engine* http_server_engine_new() {
 	LIST_INIT(&(new_instance->connection_list));
 
 	//default modules	
-	http_module_attach_to_engine(new_instance,http_module_404_new());
-	http_module_attach_to_engine(new_instance,http_module_default_headers_new());
+	http_module_attach_to_engine(new_instance,http_module_404_new());	
 	http_module_attach_to_engine(new_instance,http_module_cors_new());
+	http_module_attach_to_engine(new_instance,http_module_file_new());
 
 
 	return new_instance;
@@ -74,6 +75,8 @@ static http_server_engine_connection* find_connection(http_server_engine *server
 	return NULL;
 }
 
+
+
 void http_server_engine_close_connection(http_server_engine *server,http_server_engine_connection *c){
 
 	HTTPSERVER_DEBUG("http_server_engine_close_connection. Reference: %ld",c->reference);
@@ -100,19 +103,27 @@ void http_server_engine_close_connection(http_server_engine *server,http_server_
 		free(c->request.body.data);
 	}
 
-	//free response buffer
+	//free header header temp 
+	if(c->request.header_temp !=NULL){
+		free(c->request.header_temp);
+	}
+
+	//free output
 	if(c->response.output.buffer!=NULL){
 		free(c->response.output.buffer);
 	}
 
+	//close callback
 	if(c->connection_close_callback!=NULL)
 		c->connection_close_callback(c->reference);
-
+	
 	//remove from the list
 	LIST_REMOVE(c,list);	
 
 	//finally free the connection object
 	free(c);
+
+	
 
 }
 
@@ -133,15 +144,25 @@ void http_server_engine_tcp_disconnected(http_server_engine *server,void *refere
 void http_server_engine_tcp_ready_to_send(http_server_engine *server,void *reference){
 
 
-	http_server_engine_connection *connection = find_connection(server,reference);
+	http_server_engine_connection *c = find_connection(server,reference);
 
-	if(connection==NULL){
+	if(c==NULL){
 		HTTPSERVER_DEBUG("http_server_engine_tcp_disconnected : Connection not found");
 		return;
 	}
 
-	//close for now
-	http_server_engine_close_connection(server,connection);
+	if(!c->response.body_finished){
+		//get more data
+		http_engine_response_send_response(c);
+	}
+
+	//close connection, we're done
+	if(c->response.body_finished){
+		http_server_engine_close_connection(server,c);
+	}
+
+	
+	
 
 
 }
@@ -180,12 +201,19 @@ void http_server_engine_tcp_received(http_server_engine *server,void *reference,
 		buffer,
 		len);
 
+	if(connection->response.code!=0){
+		//response has been set - stop processing
+		return;
+	}
+
 	if (connection->parser.upgrade) {
   		/* handle new protocol */
 		//on_websocket_data(&conn->parser,data,len);
 		HTTPSERVER_DEBUG("http_server_engine_tcp_received: Connection Upgrade");
 
-	} else if (nparsed != len) {
+	} 
+
+	if (nparsed != len) {
 		HTTPSERVER_DEBUG("http_server_engine_tcp_received: Parser error");
 	  	// Handle error. Usually just close the connection.
 		http_server_engine_close_connection(server,connection);
@@ -316,21 +344,18 @@ static int parser_on_header_field(http_parser *parser, const char *at, size_t le
 	//grab the connection
 	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
-	//clear found flag for all
-	for(int i=0;i<MAX_HEADERS;i++){
-		c->request.headers[i].found=0;
+	//begin header
+	if(c->request.header_temp==NULL){
+		c->request.header_temp = (char*)malloc(HTTP_HEADER_TEMP_SIZE);
+		c->request.header_state=1;
 	}
 	
-	for(int i=0;i<MAX_HEADERS;i++){
-		if(c->request.headers[i].key==NULL)
-			break;
+	if(c->request.header_state==2){
+		//previous state was header value, clear temp
+		memset(c->request.header_temp,0,HTTP_HEADER_TEMP_SIZE);
+	}
 
-		if(strncasecmp(c->request.headers[i].key,at,length)==0){
-			HTTPSERVER_DEBUG("parser_on_header_field Header marked for saving");
-			c->request.headers[i].found=1;
-			break;
-		}		
-	}	
+	strncat(c->request.header_temp,at,length);	
 	
 	return 0;
 }
@@ -342,38 +367,49 @@ static int parser_on_header_value(http_parser *parser, const char *at, size_t le
 	//grab the connection
 	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
+	c->request.header_state=2;//set state
 
+	//header field
+	char *header_temp = c->request.header_temp;
+	http_request_header *header =NULL;
+
+	//find the header
 	for(int i=0;i<MAX_HEADERS;i++){
 		if(c->request.headers[i].key==NULL)
 			break;
 
-		if(c->request.headers[i].found==1){
-
-			if(c->request.headers[i].value==NULL){
-				HTTPSERVER_DEBUG("parser_on_header_value Saving header");
-				
-				c->request.headers[i].value=(char *)malloc(length+1);
-				memcpy(c->request.headers[i].value,at,length);
-				c->request.headers[i].value[length]=0;
-
-				break;
-			}
-			else{
-				//header values can come in more than one packet, hance being split
-				//here we join them
-
-				unsigned int currentLength = strlen(c->request.headers[i].value);
-				unsigned int newLength = currentLength+length+1;
-				char * newBuffer = (char *)malloc(newLength+1);
-				memcpy(newBuffer,c->request.headers[i].value,currentLength); //copy previous data
-				memcpy(newBuffer+currentLength,at,length); //copy new data
-				newBuffer[newLength]=0; //null terminate
-				free(c->request.headers[i].value);
-				c->request.headers[i].value=newBuffer;				
-			}
-		}
-		
+		if(strcasecmp(c->request.headers[i].key,header_temp)==0){
+			HTTPSERVER_DEBUG("parser_on_header_field Header marked for saving");
+			header=&(c->request.headers[i]);
+			break;
+		}		
 	}	
+	
+	if(header==NULL){		
+		return 0;
+	}
+
+
+		//save header value
+	if(header->value==NULL){
+		HTTPSERVER_DEBUG("parser_on_header_value Saving header");
+		
+		header->value=(char *)malloc(length+1);
+		memcpy(header->value,at,length);
+		header->value[length]=0;
+		
+	}
+	else{
+		//header values can come in more than one packet, hance being split
+		//here we join them
+
+		unsigned int currentLength = strlen(header->value);
+		unsigned int newLength = currentLength+length+1;
+
+		header->value = (char*)realloc(header->value,newLength+1);
+		strncpy(header->value,at,length);
+						
+	}
 
 	
 	return 0;
@@ -386,10 +422,8 @@ static int parser_on_headers_complete(http_parser *parser)
 	//grab the connection
 	http_server_engine_connection *c = (http_server_engine_connection *)parser->data;
 
-	//clear found flag for all
-	for(int i=0;i<MAX_HEADERS;i++){
-		c->request.headers[i].found=0;
-	}
+	free(c->request.header_temp);
+	c->request.header_temp=NULL;
 
 	http_module_process(c,HTTP_REQUEST_ON_HEADERS);
 

@@ -10,7 +10,7 @@
 
 
 
-#include "http_module_default.h"
+#include "http_module.h"
 #include "http_server_module.h"
 #include "http_server_engine.h"
 #include "http_server_response.h"
@@ -25,7 +25,7 @@
 #include "queue.h"
 
 
-http_module http_module_cors;
+
 
 void http_server_cors_on_destroy(http_module *module){
 
@@ -33,13 +33,11 @@ void http_server_cors_on_destroy(http_module *module){
 
 }
 
-void http_module_cors_on_headers(struct http_module *module,http_server_engine_connection *c){
+void http_module_cors_on_headers(struct http_module *module,http_server_engine_connection *c,void **data){
 
     if(c->request.method_code == HTTP_OPTIONS){
 
         
-
-        c->response_module=module;
 
         c->response.code=HTTP_OK;
         
@@ -57,8 +55,6 @@ void http_module_cors_on_headers(struct http_module *module,http_server_engine_c
 			http_engine_response_add_header(c,HTTP_ACCESS_CONTROL_ALLOW_HEADERS,allow_headers->value);
 		if(allow_methods!=NULL)
 			http_engine_response_add_header(c,HTTP_ACCESS_CONTROL_ALLOW_METHODS,allow_methods->value);;
-
-        http_engine_response_send_no_body(c);
 
     }
 

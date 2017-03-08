@@ -98,11 +98,28 @@ void http_engine_response_clear_headers(http_server_engine_connection *c){
 
         if(header->key!=NULL){
             free(header->key);
-            header->key==NULL;
+            header->key=NULL;
+        }
+        else{
+            break;
         }
 
     }
 
+}
+
+void http_engine_response_sent_to_tcp(http_server_engine_connection *c,char *buffer,unsigned int len){
+    
+    if(c->send_data_callback!=NULL){
+       
+            c->send_data_callback(c->reference,buffer,len);
+            
+    }
+    else{
+        HTTPSERVER_DEBUG("http_engine_response_write_tcp_direct no callback");
+    }
+
+    
 }
 
 
@@ -143,11 +160,7 @@ static void http_engine_response_write_output(http_server_engine_connection *c,c
     }
     else if(len>0){
 
-       
-
         if((r->output.buffer_len - r->output.buffer_pos) < len){
-            
-            
 
             //resize the buffer
             unsigned int new_size = r->output.buffer_len + HTTP_MAX_TCP_CHUNK*((len/(HTTP_MAX_TCP_CHUNK/2))+1);
@@ -159,7 +172,6 @@ static void http_engine_response_write_output(http_server_engine_connection *c,c
 
         char *buffer = &(r->output.buffer[r->output.buffer_pos]);
 
-        
         memcpy(buffer,data,len);
         
         r->output.buffer_pos+=len;
@@ -179,27 +191,53 @@ static void http_engine_response_write_output(http_server_engine_connection *c,c
     SEND_NEW_LINE(c);                                                   \
 }while(0)
 
+static int ui2a(unsigned int num, char *bf)
+{
+    int n = 0,base=10,uc=0;
+    unsigned int d = 1;
+    int len = 1;
+    while (num / d >= base)
+    {
+        d *= base;
+        len ++;
+    }
+    while (d != 0)
+    {
+        int dgt = num / d;
+        num %= d;
+        d /= base;
+        if (n || dgt > 0 || d == 0)
+        {
+            *bf++ = dgt + (dgt < 10 ? '0' : (uc ? 'A' : 'a') - 10);
+            ++n;
+        }
+    }
+    *bf = 0;
+    return len;
+}
+
 void http_engine_response_send_headers(http_server_engine_connection *c){
-
     
-
     http_response *response = &(c->response);
 
     char code[16];
     memset(&code[0],0,16);
-    printf(&code[0],"%d ",response->code);
-
+    ui2a(response->code,code);
+   
     
     //SEND STATUS
     http_engine_response_write_output(c,"HTTP/"HTTP_VERSION" ",NULL_TERMINATED_STRING);
     
-    
-    http_engine_response_write_output(c,&code[0],NULL_TERMINATED_STRING);
+    http_engine_response_write_output(c,code,NULL_TERMINATED_STRING);
 
     http_engine_response_write_output(c,translate_code(response->code),NULL_TERMINATED_STRING);
     SEND_NEW_LINE(c);
 
     
+
+    //send fixed headers    
+     SEND_HEADER(c,HTTP_SERVER,HTTP_DEFAULT_SERVER); 
+     SEND_HEADER(c,HTTP_CONNECTION,HTTP_CONNECTION_CLOSE);     
 
     //SEND HEADERS
     for(unsigned int i=0;i<MAX_HEADERS;i++){
@@ -212,54 +250,75 @@ void http_engine_response_send_headers(http_server_engine_connection *c){
         SEND_HEADER(c,header->key,header->value);         
     }
 
-
-}
-
-void http_engine_response_write_tcp(http_server_engine_connection *c){
     
-    if(c->send_data_callback!=NULL){
-            c->send_data_callback(c->reference,c->response.output.buffer,c->response.output.buffer_pos);
-    }
-    else{
-        HTTPSERVER_DEBUG("http_engine_response_write_tcp no callback");
-    }
-}
 
-void http_engine_response_send_body_fixed(http_server_engine_connection *c,char *content_type,char *body,unsigned int len){
-
-    HTTPSERVER_DEBUG("http_engine_response_send_body_fixed len: %d",len);
-
-    http_engine_response_send_headers(c);
-
-    http_response *response = &(c->response);
-
-    if(len==NULL_TERMINATED_STRING)
-        len=strlen(body);
-
-    if(len>=0){
-        //length specified
-
+    if(response->content_length>0){
         //set content length
         char content_length[16];
-        printf(&content_length[0],"%d",len);
-        SEND_HEADER(c,HTTP_CONTENT_LENGTH,&content_length[0]); 
+        ui2a(response->content_length,content_length);        
+        SEND_HEADER(c,HTTP_CONTENT_LENGTH,content_length);
+    }
 
-        //set content type
-        if(content_type==NULL) 
-            content_type=HTTP_TEXT_CONTENT;
+    //set content type
+    if(response->content_type==NULL) 
+        response->content_type=HTTP_TEXT_CONTENT;
 
-        SEND_HEADER(c,HTTP_CONTENT_TYPE,content_type); 
+     SEND_HEADER(c,HTTP_CONTENT_TYPE,response->content_type); 
+    
+     SEND_NEW_LINE(c); // header | body separation
 
-        SEND_NEW_LINE(c); // header | body separation
+     
 
-        http_engine_response_write_output(c,body,len);
+     http_engine_response_sent_to_tcp(c,response->output.buffer,response->output.buffer_pos);
 
-        http_engine_response_write_tcp(c);
+}
+
+
+void http_engine_response_write_response(http_server_engine_connection *c,char *buffer,unsigned int len){
+
+    //allocate exact size
+    if(c->response.output.buffer==NULL){
+        c->response.output.buffer=(char*)malloc(len);
+        c->response.output.buffer_pos=0;
+        c->response.output.buffer_len=len;
+    }
+
+    http_engine_response_write_output(c,buffer,len);
+    http_engine_response_sent_to_tcp(c,c->response.output.buffer,c->response.output.buffer_pos);
+}
+
+void http_engine_response_send_response(http_server_engine_connection *c){
+   
+    http_response *response = &(c->response);
+
+    if(!response->headers_sent){
+       
+         http_engine_response_send_headers(c);
+         response->headers_sent=1;
+    }
+    else{
+        
+        //clean headers
+        http_engine_response_clear_headers(c);
+
+        //free the output buffer as soon as possible
+        if(c->response.output.buffer!=NULL){
+            
+            free(c->response.output.buffer);
+            c->response.output.buffer=NULL;
+        }
+
+        //invoke responding module
+        if(c->response_module->module->process.on_send_response!=NULL){
+           
+            c->response_module->module->process.on_send_response(c->response_module->module,c,&c->response_module->data);
+        }
+        else{
+           
+            c->response.body_finished=1;
+        }
     }
 
 
 }
 
-void http_engine_response_send_no_body(http_server_engine_connection *c){
-    http_engine_response_send_body_fixed(c,NULL,NULL,0);
-}

@@ -10,7 +10,7 @@
 
 
 #include "http_server_common.h"
-#include "http_module_default.h"
+#include "http_module.h"
 #include "http_server_module.h"
 #include "http_server_engine.h"
 #include "http_server_response.h"
@@ -32,7 +32,7 @@ void http_module_default_headers_on_destroy(http_module *module){
 
 }
 
-void http_module_default_headers_on_headers(struct http_module *module,http_server_engine_connection *c){
+void http_module_default_headers_on_headers(struct http_module *module,http_server_engine_connection *c,void **data){
 
    http_engine_response_add_header(c,HTTP_SERVER,HTTP_DEFAULT_SERVER);
    http_engine_response_add_header(c,HTTP_CONNECTION,"Close");

@@ -10,6 +10,7 @@
 
 #include "http_server_module.h"
 #include "http_server_engine.h"
+#include "http_server_response.h"
 #include "c_stdint.h"
 #include "c_stddef.h"
 #include "c_stdlib.h"
@@ -41,13 +42,12 @@ void http_module_attach_headers_to_connection(http_server_engine_connection *c,h
 void http_module_attach_to_connection(http_server_engine_connection *c,http_module *new_module){
 
     
-
     for(unsigned int i=0;i<MAX_MODULES;i++){
 
-        http_module *module = c->module_list[i];
+        http_module *module = c->module_list[i].module;
         
         if(module==NULL){
-            c->module_list[i]=new_module;
+            c->module_list[i].module=new_module;
             http_module_attach_headers_to_connection(c,new_module);
             //HTTPSERVER_DEBUG("http_module_process module %s added to pipeline of path %s",new_module->module_name,c->request.url.path);
             return;
@@ -61,6 +61,23 @@ void http_module_attach_to_connection(http_server_engine_connection *c,http_modu
     
 }
 
+
+
+#define RUN_MODULE_CALLBACK(c,callback) do{\
+    for(unsigned int m=0;m<MAX_MODULES;m++){            \
+            http_module *module = (c->module_list[m].module);\
+            if(module==NULL)   break;                        \
+            if(module->process.callback!=NULL){               \
+                module->process.callback(module,c,&c->module_list[m].data);\
+                 if(c->response.code!=0) {              \
+                    c->response_module=&(c->module_list[m]);\
+                     http_engine_response_send_response(c); \
+                      break;                         \
+                 }                                  \
+            }                                                             \
+        }                                                           \
+}while(0)
+
 void http_module_process(http_server_engine_connection *c,unsigned int state){
 
     //HTTPSERVER_DEBUG("http_module_process state: %d",state);
@@ -68,7 +85,6 @@ void http_module_process(http_server_engine_connection *c,unsigned int state){
     http_request *request  = &(c->request);
 
     http_server_engine *engine = c->server;
-
     
 
     if(state == HTTP_REQUEST_ON_URL){
@@ -76,30 +92,26 @@ void http_module_process(http_server_engine_connection *c,unsigned int state){
         //lets match modules that should run
         
         char *path=request->url.path;
-
         
 
         for(unsigned int m=0;m<MAX_MODULES;m++){
+
+            
 
             http_module *module = engine->module_list[m];
             
             if(module==NULL)
                 break;
 
-            
-
             for(unsigned int r=0;r<MAX_PATTERNS_MODULE;r++){
 
-                char *pattern=module->route_list[r];     
-
-                
+                char *pattern=module->route_list[r];                    
 
                 if(pattern==NULL)
                     break;           
 
                 if (c_strcasecmp(pattern, path)==0 || (pattern[strlen(pattern)-1]=='*' && c_strncasecmp(pattern, path, strlen(pattern)-1)==0) )
-               {
-                   
+               {                   
 
                    http_module_attach_to_connection(c,module);
 
@@ -111,64 +123,25 @@ void http_module_process(http_server_engine_connection *c,unsigned int state){
         }
 
         //run modules
-        for(unsigned int m=0;m<MAX_MODULES;m++){
-
-            http_module *module = c->module_list[m];
-
-            if(module==NULL)
-                break;
-
-            if(module->process.on_url!=NULL){
-                module->process.on_url(module,c);
-            }
-
-        }
+        RUN_MODULE_CALLBACK(c,on_url);
 
     }
     else if(state == HTTP_REQUEST_ON_HEADERS){
 
-        for(unsigned int m=0;m<MAX_MODULES;m++){
-
-            http_module *module = c->module_list[m];
-
-            if(module==NULL)
-                break;
-
-            if(module->process.on_headers!=NULL){
-                module->process.on_headers(module,c);
-                if(c->response.code!=0) break; //response sent
-            }
-        }
+        RUN_MODULE_CALLBACK(c,on_headers);
     }
     else if(state == HTTP_REQUEST_ON_BODY){
 
-        for(unsigned int m=0;m<MAX_MODULES;m++){
-
-            http_module *module = c->module_list[m];
-
-            if(module==NULL)
-                break;
-
-            if(module->process.on_body!=NULL){
-                module->process.on_body(module,c);
-                if(c->response.code!=0) break; //response sent
-            }
-        }
+         RUN_MODULE_CALLBACK(c,on_body);
     }
     else if(state == HTTP_REQUEST_ON_BODY_COMPLETE){
 
-        for(unsigned int m=0;m<MAX_MODULES;m++){
+         RUN_MODULE_CALLBACK(c,on_body_complete);
+    }
 
-            http_module *module = c->module_list[m];
-
-            if(module==NULL)
-                break;
-
-            if(module->process.on_body_complete!=NULL){
-                module->process.on_body_complete(module,c);
-                if(c->response.code!=0) break; //response sent
-            }
-        }
+    //if response has been set, stop parser
+    if(c->response.code!=0){
+        http_parser_pause(&(c->parser),1);
     }
 
 
@@ -212,8 +185,7 @@ void http_module_add_header(http_module *module,char *new_header){
         
             //add
         if(header==NULL){
-             module->header_list[i]=new_header;
-             break;
+             module->header_list[i]=new_header;            
              return;
         }
 

@@ -8,8 +8,8 @@
  * ----------------------------------------------------------------------------
  */
 
-#ifndef __HTTP_MODULE_DEFAULT_
-#define __HTTP_MODULE_DEFAULT_
+#ifndef __HTTP_MODULE_
+#define __HTTP_MODULE_
 
 #include "http_server_common.h"
 #include "http_server_engine.h"
@@ -27,6 +27,7 @@
 http_module* http_module_404_new();
 http_module* http_module_default_headers_new();
 http_module* http_module_cors_new();
+http_module* http_module_file_new();
 
 #endif
 

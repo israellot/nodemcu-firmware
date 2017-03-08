@@ -57,6 +57,25 @@ static int lua_http_server_instance_destroy( lua_State* L ){
 
 }
 
+static int lua_http_server_connection_count(lua_State *L){
+
+    HTTPSERVERL_DEBUG("lua_http_server_instance_listen()");
+
+    instance_userdata *data = (instance_userdata*)luaL_checkudata(L, 1, "httpserver.instance");
+    luaL_argcheck(L, data, 1, "httpserver.instance expected");
+    if(data==NULL){
+        NODE_DBG("userdata is nil.\n");
+        return 0;
+    }
+
+    unsigned int count= http_server_connection_count(data->server);
+
+    lua_pushinteger( L, count );
+
+    return 1;
+
+}
+
 static int lua_http_server_instance_listen(lua_State* L){
 
     HTTPSERVERL_DEBUG("lua_http_server_instance_listen()");
@@ -82,6 +101,7 @@ static int lua_http_server_instance_listen(lua_State* L){
 // Instance function map
 static const LUA_REG_TYPE http_instance_map[] = {
   { LSTRKEY( "listen" ),   LFUNCVAL( lua_http_server_instance_listen ) },  
+  { LSTRKEY("connection_count"),  LFUNCVAL(lua_http_server_connection_count)},
   { LSTRKEY( "__gc" ),      LFUNCVAL( lua_http_server_instance_destroy ) },
   { LSTRKEY( "__index" ),   LROVAL( http_instance_map ) },
   { LNILKEY, LNILVAL }
