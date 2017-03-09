@@ -108,17 +108,14 @@ void http_engine_response_clear_headers(http_server_engine_connection *c){
 
 }
 
-void http_engine_response_sent_to_tcp(http_server_engine_connection *c,char *buffer,unsigned int len){
+void http_engine_response_send_to_tcp(http_server_engine_connection *c,char *buffer,unsigned int len){
     
-    if(c->send_data_callback!=NULL){
-       
-            c->send_data_callback(c->reference,buffer,len);
-            
+    if(c->send_data_callback!=NULL){       
+            c->send_data_callback(c->reference,buffer,len);            
     }
     else{
         HTTPSERVER_DEBUG("http_engine_response_write_tcp_direct no callback");
     }
-
     
 }
 
@@ -269,7 +266,7 @@ void http_engine_response_send_headers(http_server_engine_connection *c){
 
      
 
-     http_engine_response_sent_to_tcp(c,response->output.buffer,response->output.buffer_pos);
+    //  http_engine_response_send_to_tcp(c,response->output.buffer,response->output.buffer_pos);
 
 }
 
@@ -284,40 +281,53 @@ void http_engine_response_write_response(http_server_engine_connection *c,char *
     }
 
     http_engine_response_write_output(c,buffer,len);
-    http_engine_response_sent_to_tcp(c,c->response.output.buffer,c->response.output.buffer_pos);
+    http_engine_response_send_to_tcp(c,c->response.output.buffer,c->response.output.buffer_pos);
 }
+
+
 
 void http_engine_response_send_response(http_server_engine_connection *c){
    
     http_response *response = &(c->response);
 
+    c->response.output.buffer_pos=0;
+
     if(!response->headers_sent){
        
          http_engine_response_send_headers(c);
+        
+         //clean headers
+         http_engine_response_clear_headers(c);
+
          response->headers_sent=1;
     }
-    else{
+    
+    // //free the output buffer as soon as possible
+    // if(c->response.output.buffer!=NULL){
         
-        //clean headers
-        http_engine_response_clear_headers(c);
+    //     free(c->response.output.buffer);
+    //     c->response.output.buffer=NULL;
+    // }
 
-        //free the output buffer as soon as possible
-        if(c->response.output.buffer!=NULL){
-            
-            free(c->response.output.buffer);
-            c->response.output.buffer=NULL;
+    //invoke responding module
+    if(c->response.body_finished){
+         http_engine_response_send_to_tcp(c,response->output.buffer,response->output.buffer_pos);
+    }
+    else{
+        if(c->response_module!=NULL && c->response_module->module->process.on_send_response!=NULL){        
+            c->response_module->module->process.on_send_response(
+                c->response_module->module,
+                c,
+                &c->response_module->data,
+                (response->output.buffer_len - response->output.buffer_pos) );
         }
-
-        //invoke responding module
-        if(c->response_module->module->process.on_send_response!=NULL){
-           
-            c->response_module->module->process.on_send_response(c->response_module->module,c,&c->response_module->data);
-        }
-        else{
-           
+        else{            
             c->response.body_finished=1;
+            http_engine_response_send_to_tcp(c,response->output.buffer,response->output.buffer_pos);
         }
     }
+
+    
 
 
 }

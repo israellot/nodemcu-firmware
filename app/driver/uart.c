@@ -16,6 +16,9 @@
 #include "user_config.h"
 #include "user_interface.h"
 #include "osapi.h"
+#include "mem.h"
+#include "../libc/c_stdlib.h"
+#include "../libc/c_stdio.h"
 
 #define UART0   0
 #define UART1   1
@@ -40,7 +43,11 @@ static os_timer_t autobaud_timer;
 
 static void (*alt_uart0_tx)(char txchar);
 
-LOCAL void ICACHE_RAM_ATTR uart0_rx_intr_handler(void *para);
+
+
+#define TX_FULL_THRHD 120
+
+LOCAL ICACHE_RAM_ATTR void uart_interrupt_handler(void *para);
 
 
 #define UART_RX_INTR_DISABLE(uart) CLEAR_PERI_REG_MASK(UART_INT_ENA(uart), UART_RXFIFO_FULL_INT_ENA|UART_RXFIFO_TOUT_INT_ENA)
@@ -54,13 +61,21 @@ LOCAL void ICACHE_RAM_ATTR uart0_rx_intr_handler(void *para);
 
 #define UART_CLEAR_ALL_INTR(uart) WRITE_PERI_REG(UART_INT_CLR(uart), 0xffff)
 #define UART_CLEAR_INTR(uart,INTERRUPT) WRITE_PERI_REG(UART_INT_CLR(uart), INTERRUPT)
-#define UART_INTERRUPT_IS(uart,INTERRUPT) INTERRUPT == (READ_PERI_REG(UART_INT_ST(uart)) & INTERRUPT)
+#define UART_INTERRUPT_IS(uart,INTERRUPT) (READ_PERI_REG(UART_INT_ST(uart)) & INTERRUPT) > 0
 
-#define UART_RX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT
-#define UART_TX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_TXFIFO_CNT_S)&UART_TXFIFO_CNT
+//#define UART_RX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT
+
+#define UART_RX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart)) & (UART_RXFIFO_CNT << UART_RXFIFO_CNT_S))
+                                 
+#define UART_TX_FIFO_COUNT(uart) ((READ_PERI_REG(UART_STATUS(uart)) & (UART_TXFIFO_CNT<<UART_TXFIFO_CNT_S)) >> UART_TXFIFO_CNT_S & UART_TXFIFO_CNT)
+//#define UART_TX_FIFO_COUNT(uart) (READ_PERI_REG(UART_STATUS(uart))>>UART_TXFIFO_CNT_S)&UART_TXFIFO_CNT
+
+#define UART_TX_FIFO_FULL(uart) UART_TX_FIFO_COUNT(uart) >= TX_FULL_THRHD
+#define UART_RX_FIFO_EMPTY(uart) UART_RX_FIFO_COUNT(uart) <=0
 
 #define UART0_READ_CHAR() READ_PERI_REG(UART_FIFO(UART0)) & 0xFF
 #define UART_WRITE_CHAR(uart,c) WRITE_PERI_REG(UART_FIFO(uart), c)
+
 
 
 
@@ -78,8 +93,11 @@ uart_config(uint8 uart_no)
     if (uart_no == UART1) {
         PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_U1TXD_BK);
     } else {
+
+        
+
         /* rcv_buff size if 0x100 */
-        ETS_UART_INTR_ATTACH(uart0_rx_intr_handler,  &(UartDev.rcv_buff));
+        ETS_UART_INTR_ATTACH(uart_interrupt_handler,  &(UartDev.rcv_buff));
         PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
         PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD);
         PIN_PULLUP_EN(PERIPHS_IO_MUX_U0RXD_U);
@@ -95,8 +113,7 @@ uart_config(uint8 uart_no)
 
 
     //clear rx and tx fifo,not ready
-    SET_PERI_REG_MASK(UART_CONF0(uart_no), UART_RXFIFO_RST | UART_TXFIFO_RST);
-    CLEAR_PERI_REG_MASK(UART_CONF0(uart_no), UART_RXFIFO_RST | UART_TXFIFO_RST);
+    UART_RESET_FIFO(uart_no);
 
     //set rx fifo trigger
     WRITE_PERI_REG(UART_CONF1(uart_no), (UartDev.rcv_buff.TrigLvl & UART_RXFIFO_FULL_THRHD) << UART_RXFIFO_FULL_THRHD_S);
@@ -105,6 +122,9 @@ uart_config(uint8 uart_no)
     WRITE_PERI_REG(UART_INT_CLR(uart_no), 0xffff);
     //enable rx_interrupt
     SET_PERI_REG_MASK(UART_INT_ENA(uart_no), UART_RXFIFO_FULL_INT_ENA);
+
+    
+    
 }
 
 
@@ -155,13 +175,24 @@ uart_tx_one_char(uint8 uart, uint8 TxChar)
       return OK;
     }
 
-    while (true){
-        uint8_t fifo_cnt = UART_TX_FIFO_COUNT(uart);
-        if (fifo_cnt < 126) {
-            break;
+    UART_TX_INTR_DISABLE(uart);
+
+    while(UART_TX_FIFO_FULL(uart)){
+        //wait for space
+
+        //do some real spinning
+        unsigned char i, j;
+        j = 0;
+        while(--j) {
+            i = 0;
+            while(--i) asm("");
         }
-    }
+
+    } 
     UART_WRITE_CHAR(uart,TxChar);
+
+    UART_TX_INTR_ENABLE(uart); 
+    
     return OK;
 }
 
@@ -243,6 +274,125 @@ void ICACHE_FLASH_ATTR uart0_putc(const char c)
   {
     uart_tx_one_char(UART0, c);
   }
+}
+
+
+
+LOCAL ICACHE_RAM_ATTR void uart0_data_received(void *para){
+
+    /* uart0 and uart1 intr combine togther, when interrupt occur, see reg 0x3ff20020, bit2, bit0 represents
+     * uart1 and uart0 respectively
+     */
+    RcvMsgBuff *pRxBuff = (RcvMsgBuff *)para;
+    uint8 RcvChar;
+    bool got_input = false;
+
+
+    while (!UART_RX_FIFO_EMPTY(0)) {
+        RcvChar = UART0_READ_CHAR();
+
+        /* you can add your handle code below.*/
+
+        *(pRxBuff->pWritePos) = RcvChar;
+
+        // insert here for get one command line from uart
+        if (RcvChar == '\r' || RcvChar == '\n' ) {
+            pRxBuff->BuffState = WRITE_OVER;
+        }
+
+        if (pRxBuff->pWritePos == (pRxBuff->pRcvMsgBuff + RX_BUFF_SIZE)) {
+            // overflow ...we may need more error handle here.
+            pRxBuff->pWritePos = pRxBuff->pRcvMsgBuff ;
+        } else {
+            pRxBuff->pWritePos++;
+        }
+
+        if (pRxBuff->pWritePos == pRxBuff->pReadPos){   // overflow one byte, need push pReadPos one byte ahead
+            if (pRxBuff->pReadPos == (pRxBuff->pRcvMsgBuff + RX_BUFF_SIZE)) {
+                pRxBuff->pReadPos = pRxBuff->pRcvMsgBuff ;
+            } else {
+                pRxBuff->pReadPos++;
+            }
+        }
+
+        got_input = true;
+    }
+
+    if (got_input && sig) {
+      if (isr_flag == *sig_flag) {
+        isr_flag ^= 0x01;
+        task_post_low (sig, 0x8000 | isr_flag << 14 | false);
+      }
+    }
+
+}
+
+LOCAL void uart_interrupt_handler(void *para){
+
+    if( UART_INTERRUPT_IS(0,UART_FRM_ERR_INT_ST) ){
+		//just clear intr
+		UART_CLEAR_INTR(0,UART_FRM_ERR_INT_CLR);
+		return;
+	}
+	if( UART_INTERRUPT_IS(1,UART_FRM_ERR_INT_ST) ){
+		//just clear intr
+		UART_CLEAR_INTR(1,UART_FRM_ERR_INT_CLR);
+		return;
+	}
+
+    if( UART_INTERRUPT_IS(0,UART_RXFIFO_OVF_INT_ST) ){		
+		
+		UART_CLEAR_INTR(0,UART_RXFIFO_OVF_INT_CLR); //clear interrupt
+		return;
+	}
+
+	//got data on rx fifo for UART 0
+	if( UART_INTERRUPT_IS(0,UART_RXFIFO_FULL_INT_ST) ){
+		
+		
+		UART_RX_INTR_DISABLE(0); //disable rx interrupt
+
+		uart0_data_received(para);
+
+		UART_CLEAR_INTR(0,UART_RXFIFO_FULL_INT_CLR); //clear interrupt
+		UART_RX_INTR_ENABLE(0); //enable interrupt back
+		return;
+	}
+	
+    //got data on UART 0 rx fifo, timeout for fifo full
+	if( UART_INTERRUPT_IS(0,UART_RXFIFO_TOUT_INT_ST) ){
+				
+		UART_RX_INTR_DISABLE(0); //disable rx interrupt
+
+        uart0_data_received(para);
+		
+		UART_CLEAR_INTR(0,UART_RXFIFO_TOUT_INT_CLR); //clear interrupt
+		UART_RX_INTR_ENABLE(0); //enable interrupt back
+		return;
+	}
+
+    //ready to send more data on UART 0
+	if( UART_INTERRUPT_IS(0,UART_TXFIFO_EMPTY_INT_ST) ){
+        
+		UART_TX_INTR_DISABLE(0);      
+
+        UART_CLEAR_INTR(0,UART_TXFIFO_EMPTY_INT_CLR); //clear interrupt 
+        
+		return;
+	}
+
+    //ready to send more data on UART 1
+	if( UART_INTERRUPT_IS(1,UART_TXFIFO_EMPTY_INT_ST) ){
+
+		UART_TX_INTR_DISABLE(1);
+
+		UART_CLEAR_INTR(1,UART_TXFIFO_EMPTY_INT_CLR); //clear interrupt
+		return;
+	}
+
+
+	
+
 }
 
 /******************************************************************************
@@ -350,6 +500,8 @@ uart_init(UartBautRate uart0_br, UartBautRate uart1_br, os_signal_t sig_input, u
 {
     sig = sig_input;
     sig_flag = flag_input;
+
+    
 
     // rom use 74880 baut_rate, here reinitialize
     UartDev.baut_rate = uart0_br;

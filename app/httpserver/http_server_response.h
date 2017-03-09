@@ -27,12 +27,14 @@ extern "C" {
 #define HTTP_CONNECTION "Connection"
 #define HTTP_CONNECTION_CLOSE "Close"
 #define HTTP_CONTENT_TYPE "Content-Type"
+#define HTTP_CONTENT_ENCODING "Content-Encoding"
 #define HTTP_SERVER "Server"
 #define HTTP_ACCESS_CONTROL_ALLOW_ORIGIN "Access-Control-Allow-Origin"
 #define HTTP_ACCESS_CONTROL_ALLOW_METHODS "Access-Control-Allow-Methods"
 #define HTTP_ACCESS_CONTROL_ALLOW_HEADERS "Access-Control-Allow-Headers"
 
 #define HTTP_TEXT_CONTENT "text/plain"
+#define HTTP_ENCODING_GZIP "gzip"
 
 
 #define HTTP_OK 200

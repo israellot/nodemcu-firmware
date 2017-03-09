@@ -980,8 +980,7 @@ tcp_slowtmr(void)
     pcb_remove = 0;
 
     /* Check if this PCB has stayed long enough in TIME-WAIT */
-    //if ((u32_t)(tcp_ticks - pcb->tmr) > 2 * TCP_MSL / TCP_SLOW_INTERVAL) {
-    if ((u32_t)(tcp_ticks - pcb->tmr) > 10) {
+    if ((u32_t)(tcp_ticks - pcb->tmr) > 2 * TCP_MSL / TCP_SLOW_INTERVAL) {    
       ++pcb_remove;
     }
     

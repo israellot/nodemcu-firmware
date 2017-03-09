@@ -25,6 +25,12 @@
 
 
 
+void http_server_engine_destroy(http_server_engine *instance){
+
+	
+
+}
+
 
 http_server_engine* http_server_engine_new() {	
 	
@@ -33,9 +39,8 @@ http_server_engine* http_server_engine_new() {
 	LIST_INIT(&(new_instance->connection_list));
 
 	//default modules	
-	http_module_attach_to_engine(new_instance,http_module_404_new());	
+	http_module_attach_to_engine(new_instance,http_module_404_new());
 	http_module_attach_to_engine(new_instance,http_module_cors_new());
-	http_module_attach_to_engine(new_instance,http_module_file_new());
 
 
 	return new_instance;
@@ -378,8 +383,7 @@ static int parser_on_header_value(http_parser *parser, const char *at, size_t le
 		if(c->request.headers[i].key==NULL)
 			break;
 
-		if(strcasecmp(c->request.headers[i].key,header_temp)==0){
-			HTTPSERVER_DEBUG("parser_on_header_field Header marked for saving");
+		if(strcasecmp(c->request.headers[i].key,header_temp)==0){			
 			header=&(c->request.headers[i]);
 			break;
 		}		
@@ -389,10 +393,9 @@ static int parser_on_header_value(http_parser *parser, const char *at, size_t le
 		return 0;
 	}
 
-
 		//save header value
 	if(header->value==NULL){
-		HTTPSERVER_DEBUG("parser_on_header_value Saving header");
+		HTTPSERVER_DEBUG("parser_on_header_value saving header %s : %.*s",header->key,length,at);
 		
 		header->value=(char *)malloc(length+1);
 		memcpy(header->value,at,length);

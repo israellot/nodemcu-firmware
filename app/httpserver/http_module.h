@@ -27,7 +27,7 @@
 http_module* http_module_404_new();
 http_module* http_module_default_headers_new();
 http_module* http_module_cors_new();
-http_module* http_module_file_new();
+http_module* http_module_file_new(const char *path_prefix,const char *fs_folder);
 
 #endif
 

@@ -67,7 +67,7 @@ typedef struct http_response {
 
         unsigned int code;
 
-        char * content_type;
+        const char * content_type;
 
         unsigned int content_length;
 

@@ -22,6 +22,12 @@
 #include "queue.h"
 #include "user_interface.h"
 #include "task/task.h"
+#include "lwip/err.h"
+#include "lwip/ip_addr.h"
+#include "lwip/dns.h" 
+#include "lwip/igmp.h"
+#include "lwip/tcp.h"
+#include "lwip/udp.h"
 
 static void http_server_connection_close_callback_task(task_param_t flag, uint8 priority);
 static void yield_request_callback_task(task_param_t flag, uint8 priority);
@@ -46,36 +52,37 @@ static void http_server_global_init(){
 
 }
 
-static esp_tcp_connection* find_connection(struct espconn *conn){
+static esp_tcp_connection* http_server_new_tcp_connection(http_server_instance *server,struct tcp_pcb *pcb){
 
-    uint32_t *remote_ip = (uint32_t*)(&(conn->proto.tcp->remote_ip));
-    uint32_t remote_port = (uint32_t)conn->proto.tcp->remote_port;
+    uint32_t remote_ip = (uint32_t)(pcb->remote_ip.addr);
+    uint32_t remote_port = (uint32_t)pcb->remote_port;
 
-    uint32_t *local_ip = (uint32_t*)(&(conn->proto.tcp->local_ip));
-    uint32_t local_port = (uint32_t)conn->proto.tcp->local_port;
+    uint32_t local_ip = (uint32_t)(pcb->local_ip.addr);
+    uint32_t local_port = (uint32_t)pcb->local_port;
 
-    uint8_t *remote_ip_8 = conn->proto.tcp->remote_ip;
+    uint8_t *remote_ip_8 = (uint8_t *)&remote_ip;
 
     esp_tcp_connection *connection;
 
-    LIST_FOREACH(connection,esp_connection_list,list){
-		if(connection->remote_ip==*remote_ip && connection->remote_port==remote_port)
-        {
-            connection->conn=conn;
+    // LIST_FOREACH(connection,esp_connection_list,list){
+	// 	if(connection->remote_ip==remote_ip && connection->remote_port==remote_port)
+    //     {
+    //         connection->tcp_pcb=pcb;
 
-            return connection;
-        }
-	}
+    //         return connection;
+    //     }
+	// }
 
-    HTTPSERVER_DEBUG("find_connection. Insert on list Remote IP: %d.%d.%d.%d , port : %ld",remote_ip_8[0],remote_ip_8[1],remote_ip_8[2],remote_ip_8[3],remote_port);
+    HTTPSERVER_DEBUG("http_server_new_tcp_connection. Remote IP: %d.%d.%d.%d , port : %ld",remote_ip_8[0],remote_ip_8[1],remote_ip_8[2],remote_ip_8[3],remote_port);
 
     //couldn't find, so create
     connection = (esp_tcp_connection*)zalloc(sizeof(esp_tcp_connection));
     connection->remote_port = remote_port;
-    connection->remote_ip = (*remote_ip);
+    connection->remote_ip = (remote_ip);
     connection->local_port = local_port;
-    connection->local_ip = (*local_ip);
-    connection->conn =conn;
+    connection->local_ip = (local_ip);
+    connection->tcp_pcb =pcb;
+    connection->server=server;
 
     LIST_INSERT_HEAD(esp_connection_list,connection,list);
 
@@ -98,40 +105,33 @@ int http_server_connection_count(http_server_instance *server_instance ){
 
 }
 
-static http_server_instance* find_server(esp_tcp_connection *tcp_conn){
-    
-    http_server_instance *instance;
-	LIST_FOREACH(instance,server_list,list){
-		if(instance->server_tcp.local_port==tcp_conn->local_port)
-			return instance;
-	}
 
-
-	return NULL;
-
-}
 
 static void http_server_esp_data_sent_callback(void *arg);
 
 static void http_server_esp_send_data(esp_tcp_connection *tcp_conn){
 
-    
-    struct espconn *esp_conn =tcp_conn->conn;
+    u16_t tcp_buffer_size = tcp_sndbuf(tcp_conn->tcp_pcb);
 
-    
+    //HTTPSERVER_DEBUG("http_server_esp_send_data b size: %d",tcp_buffer_size);
 
-    if(tcp_conn->tcp_data.buffer_len>HTTP_MAX_TCP_CHUNK){
+    if(tcp_conn->tcp_data.buffer_len>tcp_buffer_size){
         //send partial data
         
-        espconn_send(esp_conn,tcp_conn->tcp_data.buffer,HTTP_MAX_TCP_CHUNK);
+        err_t err = tcp_write(tcp_conn->tcp_pcb, tcp_conn->tcp_data.buffer, tcp_buffer_size, 0);
+       
+        HTTPSERVER_DEBUG("err:%d sent %d",err,tcp_buffer_size);
 
-        tcp_conn->tcp_data.buffer+=HTTP_MAX_TCP_CHUNK;
-        tcp_conn->tcp_data.buffer_len -= HTTP_MAX_TCP_CHUNK;       
+        tcp_conn->tcp_data.buffer+=tcp_buffer_size;
+        tcp_conn->tcp_data.buffer_len -= tcp_buffer_size;       
 
         
     }else{
         
-        espconn_send(esp_conn,tcp_conn->tcp_data.buffer,tcp_conn->tcp_data.buffer_len);
+         err_t err = tcp_write(tcp_conn->tcp_pcb, tcp_conn->tcp_data.buffer, tcp_conn->tcp_data.buffer_len, 0);
+
+        HTTPSERVER_DEBUG("err :%d sent %d",err,tcp_conn->tcp_data.buffer_len);
+       
         tcp_conn->tcp_data.buffer=NULL;
         tcp_conn->tcp_data.buffer_len = 0;
         
@@ -142,12 +142,11 @@ static void http_server_esp_send_data(esp_tcp_connection *tcp_conn){
 /* 
  *   This callback is called by the SDK when a connection is ready to send more data
  */
-static void http_server_esp_data_sent_callback(void *arg){
+static err_t http_server_lwip_data_sent_callback(void *arg, struct tcp_pcb *tpcb, u16_t len){
 
-    struct espconn *esp_conn = (void*)arg;
-
+    
     //find the connection reference
-    esp_tcp_connection *tcp_conn = find_connection(esp_conn);
+    esp_tcp_connection *tcp_conn = (esp_tcp_connection*)(arg);
 
 
     if(tcp_conn->tcp_data.buffer!=NULL){
@@ -157,12 +156,11 @@ static void http_server_esp_data_sent_callback(void *arg){
     else{
         //callback engine
 
-         //find the server
-        http_server_instance *server_instance = find_server(tcp_conn);
-
         //forward to engine
-        http_server_engine_tcp_ready_to_send(server_instance->engine,tcp_conn);
+        http_server_engine_tcp_ready_to_send(tcp_conn->server->engine,tcp_conn);
     }   
+
+    return ERR_OK;
 
 }
 
@@ -182,25 +180,40 @@ static void http_server_send_data_callback(void *reference, char *data, unsigned
 }
 
 /* 
- *   This callback is called by the SDK when a connection has received data
+ *   This callback is called by LWIP when a connection has received data
  */
-static void http_server_data_received_callback(void *arg, char *data, unsigned short len) {
 
-    struct espconn *conn=arg;
-    esp_tcp_connection *tcp_conn = find_connection(conn);
+static void http_server_lwip_error_callback(void *arg, err_t err) {
+  
+    esp_tcp_connection *tcp_conn = (esp_tcp_connection*)arg;
+    tcp_conn->tcp_pcb=NULL; // Will be freed at LWIP level
 
-    uint8_t *remote_ip = conn->proto.tcp->remote_ip;
-    int remote_port = conn->proto.tcp->remote_port;
-    int local_port = conn->proto.tcp->local_port;
+    HTTPSERVER_DEBUG("http_server_lwip_error_callback %d",err);
+      
+    tcp_conn->disconnected=true;
 
+    //forward to engine
+    http_server_engine_tcp_disconnected(tcp_conn->server->engine,tcp_conn);
+
+}
+
+static err_t http_server_lwip_data_received_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
+    
+    esp_tcp_connection *tcp_conn = (esp_tcp_connection*)arg;
+
+    if (!p) {
+        //network eror
+        return tcp_close(tpcb);
+    }
+   
     //HTTPSERVER_DEBUG("http_server_data_received_callback Remote IP: %d.%d.%d.%d Remote Port: %d, Local Port: %d,  Bytes: %d",remote_ip[0],remote_ip[1],remote_ip[2],remote_ip[3],remote_port,local_port,len);
-
-    //find the server
-    http_server_instance *server_instance = find_server(tcp_conn);
-
+   
     //forward to http engine
-    http_server_engine_tcp_received(server_instance->engine,tcp_conn,data,len);
+    http_server_engine_tcp_received(tcp_conn->server->engine,tcp_conn,p->payload,p->len);
+    pbuf_free(p);
+    tcp_recved(tpcb, TCP_WND);
 
+    return ERR_OK;
 }
 
 static void yield_request_callback_task(task_param_t flag, uint8 priority){
@@ -235,19 +248,17 @@ static void http_server_connection_close_callback_task(task_param_t flag, uint8 
         
         if(!connection->disconnected){
             
-            int disconnect_result = espconn_disconnect(connection->conn);
+            int disconnect_result = tcp_close(connection->tcp_pcb);
             connection->disconnected=1;
             HTTPSERVER_DEBUG("http_server_connection_close_callback_task. Disconnect result: %d",disconnect_result);        
-        }
-
-        espconn_abort(connection->conn);
+        }       
 
         LIST_REMOVE(connection,list);
         free(connection);
 
     }
 
-
+ 
 }
 
 /* 
@@ -256,92 +267,38 @@ static void http_server_connection_close_callback_task(task_param_t flag, uint8 
 static void http_server_connection_close_callback(void *reference){
 
     
-
     //we should disconnect from a task rather than from a callback. SDK instructions
     task_post_low(connection_close_callback_task_signal,(task_param_t)reference);
 
 }
 
-/* 
- *   This callback is called by the SDK when a connection is closed client side
- */
-static void http_server_tcp_disconnected_callback(void *arg){
-    
-    struct espconn *conn=arg;
-
-    
-
-    esp_tcp_connection *tcp_conn = find_connection(conn);
-
-    uint8_t *remote_ip = conn->proto.tcp->remote_ip;
-    int remote_port = conn->proto.tcp->remote_port;
-
-    HTTPSERVER_DEBUG("http_server_disconnected_callback. Reference: %ld, Remote IP: %d.%d.%d.%d Port: %d",arg,remote_ip[0],remote_ip[1],remote_ip[2],remote_ip[3],remote_port);
-
-    http_server_instance *server_instance = find_server(tcp_conn);
-
-    if(server_instance==NULL){
-        HTTPSERVER_DEBUG("http_server_disconnected_callback server instane not found");
-         
-        LIST_REMOVE(tcp_conn,list);
-        free(tcp_conn);
-
-        return;
-    }
-
-    tcp_conn->disconnected=true;
-
-    //forward to engine
-    http_server_engine_tcp_disconnected(server_instance->engine,tcp_conn);
-    
-}
-
-/* 
- *   This callback is called by the SDK when a new connections arrives
- */
-static void http_server_connect_callback(void *arg) {
+static err_t http_server_lwip_connect_callback(void *arg, struct tcp_pcb *newpcb, err_t err) {
 
     http_server_global_init();
 
-	struct espconn *conn=arg;
-    esp_tcp_connection *tcp_conn = find_connection(conn);
+    http_server_instance *server=(http_server_instance *)arg;
 
-    uint8_t *remote_ip = conn->proto.tcp->remote_ip;
-    int remote_port = conn->proto.tcp->remote_port;
+    esp_tcp_connection *tcp_conn = http_server_new_tcp_connection(server,newpcb);
 
-    //HTTPSERVER_DEBUG("http_server_connect_callback new connection. Reference: %ld, Remote IP: %d.%d.%d.%d Port: %d",arg,remote_ip[0],remote_ip[1],remote_ip[2],remote_ip[3],remote_port);
-
-    http_server_instance *server_instance = find_server(tcp_conn);
-
-    if(server_instance==NULL){
-        HTTPSERVER_DEBUG("http_server_connect_callback server instane not found");
-        return;
-    }
-
-	http_server_engine_connection *engine_connection= http_server_engine_new_connection(server_instance->engine,tcp_conn);
+    http_server_engine_connection *engine_connection= http_server_engine_new_connection(tcp_conn->server->engine,tcp_conn);
 
     //setup callbacks
     engine_connection->connection_close_callback=http_server_connection_close_callback;
     engine_connection->send_data_callback = http_server_send_data_callback;
     engine_connection->yield_callback=http_server_connection_yield_callback;
 
-	//let's disable NAGLE alg so TCP outputs faster ( in theory )
-	espconn_set_opt(conn, ESPCONN_NODELAY );
-    espconn_set_opt(conn, ESPCONN_REUSEADDR );
-    espconn_clear_opt(conn,ESPCONN_KEEPALIVE);
-    //espconn_set_opt(conn, ESPCONN_COPY);
+    tcp_arg(newpcb, tcp_conn);
+    tcp_err(newpcb, http_server_lwip_error_callback);
+    tcp_recv(newpcb, http_server_lwip_data_received_callback);
+    tcp_sent(newpcb, http_server_lwip_data_sent_callback);
+    tcp_nagle_disable(newpcb);
+    // newpcb->so_options |= SOF_KEEPALIVE;
+    // newpcb->keep_idle = 5 * 1000;
+    // newpcb->keep_cnt = 1;
+    tcp_accepted(server->tcp_pcb);
 
-
-    //register callbacks for tcp//register espconn callbacks
-    espconn_regist_recvcb(conn, http_server_data_received_callback);
-    // espconn_regist_reconcb(conn, http_process_reconnect_cb);
-    espconn_regist_disconcb(conn, http_server_tcp_disconnected_callback);    
-    espconn_regist_sentcb(conn,http_server_esp_data_sent_callback);
-    //espconn_regist_write_finish(conn,http_server_esp_data_sent_callback);
-
-    
+    return ERR_OK;
 }
-
 
 
 http_server_instance *http_server_new(){
@@ -390,37 +347,29 @@ int http_server_listen(http_server_instance* server,listen_interface interface,u
         return 0;
     }
 
-    server->server_conn = (struct espconn*)os_malloc(sizeof(struct espconn));
 
-    espconn_delete(server->server_conn); //just to be sure we are on square 1
-	
-	server->server_conn->type = ESPCONN_TCP;
-	server->server_conn->state = ESPCONN_NONE;
-	server->server_conn->proto.tcp = &server->server_tcp;
-	server->server_conn->proto.tcp->local_port = port;
+    server->tcp_pcb=tcp_new();
+
+    const char *domain = "0.0.0.0";
+    ip_addr_t addr;
+    ipaddr_aton(domain, &addr);
+    
+    server->tcp_pcb->so_options |= SOF_REUSEADDR;
+    tcp_bind(server->tcp_pcb, &addr, port);
+    tcp_arg(server->tcp_pcb, server);
+
+    struct tcp_pcb *pcb = tcp_listen(server->tcp_pcb);
+    server->tcp_pcb = pcb;
+    tcp_accept(server->tcp_pcb, http_server_lwip_connect_callback);
+
 
     if(interface!=BOTH){
         HTTPSERVER_DEBUG("http_server_listen only AT+SP mode avaiable for now");
         return 0;
     }
 
-     os_memset(server->server_conn->proto.tcp->local_ip,0,4); //any ip
-
-    // uint8_t wifi_mode = wifi_get_opmode();
-    
-    // if(wifi_mode = 3){       
-    //     os_memset(server->server_conn.proto.tcp->local_ip,0,4);
-    // }
-    // else{
-    //     struct ip_info ipconfig;
-    //     wifi_get_ip_info(interface==ST?0:1,&ipconfig);
-    //     os_memcpy(server->server_conn.proto.tcp->local_ip,&ipconfig,4);
-    // }
-        
-    espconn_regist_connectcb(server->server_conn, http_server_connect_callback);	
-    int result=	espconn_accept(server->server_conn);
-
-    HTTPSERVER_DEBUG("http_server_listen espconn_accept result: %d",result);
+ 
+    HTTPSERVER_DEBUG("http_server_listen espconn_accept");
 
     return 0;
 }

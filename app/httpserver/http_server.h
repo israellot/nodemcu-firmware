@@ -42,6 +42,8 @@ typedef struct http_server_instance{
     //Listening connection data
 	struct espconn *server_conn;
 
+    struct tcp_pcb *tcp_pcb;
+
 	esp_tcp server_tcp;
 
 }http_server_instance;
@@ -53,9 +55,11 @@ typedef struct esp_tcp_connection{
     uint32_t local_ip;
     uint32_t remote_port;
     uint32_t local_port;
-    struct espconn *conn;
+    
     uint8_t disconnected;
-   
+    struct tcp_pcb *tcp_pcb;
+
+    http_server_instance *server;
 
     struct tcp_data{
         char *buffer;

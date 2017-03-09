@@ -12,6 +12,9 @@
 #include "lauxlib.h"
 #include "platform.h"
 #include "http_server.h"
+#include "http_server_engine.h"
+#include "http_server_module.h"
+#include "http_module.h"
 
 #define HTTPSERVERL_DEBUG(fmt,...) HTTPSERVER_DEBUG("Lua "#fmt, ##__VA_ARGS__)
 
@@ -76,6 +79,47 @@ static int lua_http_server_connection_count(lua_State *L){
 
 }
 
+static int lua_http_server_use_filesystem(lua_State* L){
+
+    HTTPSERVERL_DEBUG("lua_http_server_use_filesystem()");
+
+    instance_userdata *data = (instance_userdata*)luaL_checkudata(L, 1, "httpserver.instance");
+    luaL_argcheck(L, data, 1, "httpserver.instance expected");
+    if(data==NULL){
+        NODE_DBG("userdata is nil.\n");
+        return 0;
+    }
+
+    int length;
+    const char * prefix=NULL;
+    const char * folder=NULL;
+
+     if (lua_isstring(L, 2))
+    {
+        prefix     = luaL_checklstring(L, 2, &length);
+    }
+    if (lua_isstring(L, 3))
+    {
+        folder     = luaL_checklstring(L, 3, &length);
+    }
+
+    http_module *module = http_module_file_new(prefix,folder);
+    http_module_attach_to_engine(data->server->engine,module);
+
+    //create user data object
+    http_module **module_data = (http_module **)lua_newuserdata(L, sizeof(http_module *));
+   
+    // set its metatable
+    luaL_getmetatable(L, "httpmodule.filesystem");
+    lua_setmetatable(L, -2);
+
+    *module_data=module;
+
+    return 1;
+
+
+}
+
 static int lua_http_server_instance_listen(lua_State* L){
 
     HTTPSERVERL_DEBUG("lua_http_server_instance_listen()");
@@ -98,8 +142,19 @@ static int lua_http_server_instance_listen(lua_State* L){
 }
 
 
+
+// File system module function map
+static const LUA_REG_TYPE http_module_filesystem_map[] = {
+  
+  { LSTRKEY( "__index" ),   LROVAL( http_module_filesystem_map ) },
+  { LNILKEY, LNILVAL }
+};
+
+
+
 // Instance function map
 static const LUA_REG_TYPE http_instance_map[] = {
+  { LSTRKEY( "use_filesystem" ),   LFUNCVAL( lua_http_server_use_filesystem ) },
   { LSTRKEY( "listen" ),   LFUNCVAL( lua_http_server_instance_listen ) },  
   { LSTRKEY("connection_count"),  LFUNCVAL(lua_http_server_connection_count)},
   { LSTRKEY( "__gc" ),      LFUNCVAL( lua_http_server_instance_destroy ) },
@@ -117,6 +172,7 @@ static const LUA_REG_TYPE httpserver_map[] = {
 int httpserver_init( lua_State *L )
 {
   luaL_rometatable(L, "httpserver.instance", (void *)http_instance_map);  // httpserver.instance
+  luaL_rometatable(L, "httpmodule.filesystem", (void *)http_module_filesystem_map);  
   return 0;
 }
 

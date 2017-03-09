@@ -23,6 +23,7 @@ struct http_server_engine_connection;
 
 typedef void (*http_module_self_callback)(struct http_module *module);
 typedef void (*http_module_event_delegate)(struct http_module *module,struct http_server_engine_connection *connection,void **data);
+typedef void (*http_module_send_response_delegate)(struct http_module *module,struct http_server_engine_connection *connection,void **data,unsigned int max_length);
 
 
 typedef struct http_module{
@@ -40,7 +41,7 @@ typedef struct http_module{
 		http_module_event_delegate on_headers;
 		http_module_event_delegate on_body;
 		http_module_event_delegate on_body_complete;
-		http_module_event_delegate on_send_response;
+		http_module_send_response_delegate on_send_response;
 
 	} process;
 

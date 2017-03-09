@@ -95,7 +95,7 @@ reswitch:	switch (ch = *fmt++) {
 				put(ch & 0x7f);
 			break;
 		case '.':	//allow print with lenght specifier
-					//ex: ("%.s",5,p) prints 5 chars from pointer p	
+					//ex: ("%.*s",5,p) prints 5 chars from pointer p	
 			if( *fmt++ =='*'){
 				if( *fmt++ =='s'){
 

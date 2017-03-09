@@ -5,7 +5,7 @@
 
 #include "mem.h"
 
-#define strncasecmp c_strncasecmp
+
 
 #ifndef malloc 
 #define malloc(a) c_malloc(a)
@@ -26,6 +26,12 @@
 #ifndef memcpy 
 #define memcpy(a,b,c) c_memcpy(a,b,c)
 #endif
+
+#define strcpy c_strcpy
+#define strcat c_strcat
+#define strcmp c_strcmp
+#define strncasecmp c_strncasecmp
+
 
 
 static const char log_prefix[] = "hs ";
@@ -67,5 +73,6 @@ static const char log_prefix[] = "hs ";
 
 #define HTTP_ACCESS_CONTROL_REQUEST_HEADERS "Access-Control-Request-Headers"
 #define HTTP_ACCESS_CONTROL_REQUEST_METHOD "Access-Control-Request-Method"
+#define HTTP_ACCEPT_ENCODING "Accept-Encoding"
 
 #endif
